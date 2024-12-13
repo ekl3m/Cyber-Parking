@@ -1,0 +1,57 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Parking Monitor</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            text-align: center;
+        }
+
+        img {
+            width: 70%;
+            border: 2px solid black;
+        }
+    </style>
+</head>
+
+<body>
+    <h1>Monitoring Parkingu</h1>
+
+    <form id="source-form">
+        <label>
+            <input type="radio" name="source" value="camera" checked>
+            Kamera na żywo
+        </label>
+        <label>
+            <input type="radio" name="source" value="video">
+            Wideo z katalogu static
+        </label>
+        <button type="submit">Ustaw źródło</button>
+    </form>
+
+    <br>
+    <!-- Wyświetlanie obrazu wideo -->
+    <img id="video-stream" src="{{ url_for('video_feed') }}" />
+
+    <script>
+        document.getElementById('source-form').addEventListener('submit', function (event) {
+            event.preventDefault();
+
+            const formData = new FormData(this);
+            fetch('/set_source', {
+                method: 'POST',
+                body: formData
+            }).then(response => {
+                if (response.ok) {
+                    alert('Źródło ustawione!');
+                }
+            });
+        });
+    </script>
+</body>
+
+</html>

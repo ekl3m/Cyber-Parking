@@ -11,9 +11,36 @@
             text-align: center;
         }
 
-        img {
+        #video-feed {
             width: 70%;
+            /* Szerokość obrazu */
+            height: 600px;
+            /* Stała wysokość */
             border: 2px solid black;
+            object-fit: cover;
+            /* Dopasowanie zawartości */
+        }
+
+        #logs {
+            text-align: left;
+            width: 70%;
+            height: 200px;
+            margin: 20px auto;
+            border: 1px solid #ccc;
+            overflow-y: scroll;
+            background: #f9f9f9;
+            padding: 10px;
+            font-size: 14px;
+            line-height: 1.5;
+        }
+
+        .log-entry {
+            padding: 5px 0;
+            border-bottom: 1px solid #ddd;
+        }
+
+        .log-entry:last-child {
+            border-bottom: none;
         }
     </style>
 </head>
@@ -34,10 +61,44 @@
     </form>
 
     <br>
-    <!-- Wyświetlanie obrazu wideo -->
-    <img id="video-stream" src="{{ url_for('video_feed') }}" />
+    <img id="video-feed" src="/video_feed" alt="Brak obrazu wideo" onerror="this.src='static/placeholder.jpg';">
+
+    <div id="logs">
+        <h3>Logi:</h3>
+    </div>
 
     <script>
+        const logDiv = document.getElementById('logs');
+        const seenLogs = new Set(); // Zestaw do śledzenia unikalnych logów
+
+        // Funkcja dodająca log do interfejsu
+        function addLog(message) {
+            if (seenLogs.has(message)) return; // Ignoruj, jeśli log już istnieje
+            seenLogs.add(message);
+
+            const newLog = document.createElement('div');
+            newLog.className = 'log-entry';
+            newLog.textContent = message;
+            logDiv.appendChild(newLog);
+
+            // Przewiń logi na dół
+            logDiv.scrollTop = logDiv.scrollHeight;
+        }
+
+        // Pobierz istniejące logi przy ładowaniu strony
+        fetch('/get_all_logs')
+            .then(response => response.json())
+            .then(logs => {
+                logs.forEach(log => addLog(log));
+            });
+
+        // Połączenie z loggerem w czasie rzeczywistym
+        const eventSource = new EventSource('/logs');
+        eventSource.onmessage = function (event) {
+            addLog(event.data);
+        };
+
+        // Obsługa zmiany źródła
         document.getElementById('source-form').addEventListener('submit', function (event) {
             event.preventDefault();
 

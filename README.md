@@ -83,7 +83,7 @@ git push origin feature/your-feature
 
 ## License
 
-This project is licensed under the Creative Commons BY-NC-ND license to ekl3m. See the `"LICENSE"` tab for more details.
+This project is licensed under the Creative Commons BY-NC-ND license to ekl3m. See the `"License"` tab for more details.
 
 ## Contact
 

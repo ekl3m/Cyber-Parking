@@ -12,7 +12,15 @@ camera = None
 camera_lock = threading.Lock()  # Blokada dla obsługi kamery
 
 # Domyślny plik wideo
-DEFAULT_VIDEO_PATH = os.path.join('static', 'sample.mp4')
+DEFAULT_VIDEO_PATH = '/Users/sqstudio/Desktop/Studia/Przetwarzanie_Sygnałów_i_Obrazów/cyber-parking/static/sample.mp4'
+
+# Model YOLOv8
+from roboflow import Roboflow
+from ultralytics import YOLO
+rf = Roboflow(api_key="FWlZpKPCE4GysrCWg6LC")
+project = rf.workspace("muhammad-syihab-bdynf").project("parking-space-ipm1b")
+version = project.version(4)
+model = version.model
 
 # Lista logów przechowywana w pamięci
 log_history = []
@@ -22,7 +30,7 @@ def log_event(message):
     timestamp = time.strftime('%Y-%m-%d %H:%M:%S')
     log_message = f"[{timestamp}] {message}"
     log_history.append(log_message)
-    print(log_message)  # Wyświetlanie logów w konsoli
+    print(log_message)
 
 def log_memory_usage():
     """Logowanie zużycia pamięci."""
@@ -42,18 +50,67 @@ def cleanup(sig, frame):
 
 signal(SIGINT, cleanup)
 
+# Dodanie czarnego pasa na srodek klatki
+def add_black_band(frame):
+    height, width, _ = frame.shape
+    top = (height // 3) - 20
+    bottom = 2 * height // 3
+    frame[top:bottom, :] = 0
+    return frame
+
+# Detekcja parkingów
+def detect_parking_areas(frame):
+    """Wykorzystanie modelu YOLOv8 do detekcji miejsc parkingowych."""
+
+    # Ukrycie niechcianego obszaru przed modelem
+    # frame = add_black_band(frame)
+
+    # Konwersja obrazu do RGB (YOLO wymaga przestrzeni RGB)
+    frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+
+    # Predykcja z modelu YOLO
+    results = model.predict(frame_rgb, confidence=12, overlap=35).json()
+
+    # Debugowanie wyników detekcji
+    # print("Wyniki detekcji:", results)
+
+    parking_areas = []
+    for prediction in results['predictions']:
+        # print("Klasa:", prediction['class'])  # Logowanie klasy detekcji
+        # print("Predykcja:", prediction)  # Logowanie szczegółów predykcji
+
+        # Sprawdzenie, czy klasyfikacja to miejsce parkingowe
+        if prediction['class'] == 'empty' or prediction['class'] == 'occupied':
+            x = int(prediction['x'] - prediction['width'] / 2)
+            y = int(prediction['y'] - prediction['height'] / 2)
+            w = int(prediction['width'])
+            h = int(prediction['height'])
+            parking_areas.append((x, y, x + w, y + h, prediction['class']))
+
+    return parking_areas
+
+def draw_parking_boxes(frame, parking_areas):
+    for (x1, y1, x2, y2, status) in parking_areas:
+        if status == 'empty':
+            color = (0, 255, 0)  # Zielony dla miejsc "empty"
+            label = 'Empty'
+        elif status == 'occupied':
+            color = (0, 0, 255)  # Czerwony dla miejsc "occupied"
+            label = 'Occupied'
+
+        print(f"Rysowanie prostokąta: ({x1}, {y1}), ({x2}, {y2})")  # Logowanie współrzędnych
+        cv2.rectangle(frame, (x1, y1), (x2, y2), color, 2)
+        cv2.putText(frame, label, (x1, y1 - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.9, color, 2)
+
 def generate_frames():
-    """Generowanie klatek strumieniowych."""
     global camera
     placeholder_path = os.path.join('static', 'placeholder.jpg')
-    if not os.path.exists(placeholder_path):
-        log_event(f"Nie znaleziono pliku zastępczego: {placeholder_path}")
-        placeholder_frame = 255 * np.ones((480, 640, 3), dtype=np.uint8)
-    else:
-        placeholder_frame = cv2.imread(placeholder_path)
-        if placeholder_frame is None:
-            log_event("Nie udało się załadować obrazu zastępczego.")
-            placeholder_frame = 255 * np.ones((480, 640, 3), dtype=np.uint8)
+    placeholder_frame = (cv2.imread(placeholder_path) if os.path.exists(placeholder_path) 
+                         else 255 * np.ones((480, 640, 3), dtype=np.uint8))
+
+    parking_areas = None
+    frame_skip = 5  # Liczba klatek do pominięcia dla przyspieszenia
+    frame_counter = 0  # Licznik klatek
 
     while True:
         try:
@@ -65,25 +122,34 @@ def generate_frames():
                         log_event("Kamera nie dostarcza klatek. Wyświetlanie klatki zastępczej.")
                         frame = placeholder_frame
                     else:
+                        frame_counter += 1
+                        
+                        # Pomiń co 10. klatkę
+                        if frame_counter % frame_skip != 0:
+                            continue  # Pomijamy tę klatkę
+
                         log_event("Klatka kamery odczytana pomyślnie.")
+
+                        parking_areas = detect_parking_areas(frame)
+                        log_event(f"Wykryto {len(parking_areas)} miejsc parkingowych.")
+
+                        if parking_areas:
+                            draw_parking_boxes(frame, parking_areas)
                 else:
                     log_event("Brak aktywnego źródła wideo. Wyświetlanie klatki zastępczej.")
                     frame = placeholder_frame
 
-            # Kodowanie klatki do formatu JPEG
             success, buffer = cv2.imencode('.jpg', frame)
             if not success:
                 raise ValueError("Nie udało się zakodować klatki do JPEG.")
-            
+
             frame = buffer.tobytes()
             yield (b'--frame\r\n'
                    b'Content-Type: image/jpeg\r\n\r\n' + frame + b'\r\n')
-            
-            # Dodanie krótkiego opóźnienia
-            time.sleep(0.03)  # Odpowiada około 30 FPS
+
         except Exception as e:
             log_event(f"Błąd w generatorze klatek: {str(e)}")
-            time.sleep(1)  # Krótkie opóźnienie, aby zapobiec nadmiernemu obciążeniu CPU
+            time.sleep(1)
 
 @app.route('/')
 def index():
@@ -91,20 +157,17 @@ def index():
 
 @app.route('/set_source', methods=['POST'])
 def set_source():
-    """Ustawienie źródła wideo."""
     global camera
     source = request.form.get('source')
 
     with camera_lock:
-        # Zamknij poprzednie źródło
         if camera:
             log_event("Zwalnianie poprzedniego źródła.")
             camera.release()
             camera = None
 
-        # Ustaw nowe źródło
         if source == 'camera':
-            camera = cv2.VideoCapture(0)  # Kamera na żywo
+            camera = cv2.VideoCapture(0)
             if not camera.isOpened():
                 log_event("Nie udało się otworzyć kamery.")
                 return "Nie udało się otworzyć kamery!", 500
@@ -112,26 +175,23 @@ def set_source():
             camera.set(cv2.CAP_PROP_FRAME_HEIGHT, 480)
             log_event("Źródło ustawione: Kamera na żywo.")
         elif source == 'video':
-            video_path = DEFAULT_VIDEO_PATH  # Wczytaj domyślne wideo
-            if not os.path.exists(video_path):
+            if not os.path.exists(DEFAULT_VIDEO_PATH):
                 log_event("Nie znaleziono domyślnego pliku wideo!")
                 return "Nie znaleziono domyślnego pliku wideo!", 404
-            camera = cv2.VideoCapture(video_path)
+            camera = cv2.VideoCapture(DEFAULT_VIDEO_PATH)
             if not camera.isOpened():
                 log_event("Nie udało się otworzyć pliku wideo.")
                 return "Nie udało się otworzyć pliku wideo!", 500
-            log_event(f"Źródło ustawione: Wideo z pliku ({video_path}).")
+            log_event(f"Źródło ustawione: Wideo z pliku ({DEFAULT_VIDEO_PATH}).")
 
     return "Źródło ustawione", 200
 
 @app.route('/video_feed')
 def video_feed():
-    """Strumień wideo."""
     return Response(generate_frames(), mimetype='multipart/x-mixed-replace; boundary=frame')
 
 @app.route('/logs')
 def logs():
-    """Strumień logów dla interfejsu webowego."""
     def stream_logs():
         index = 0
         while True:
@@ -142,7 +202,6 @@ def logs():
 
 @app.route('/get_all_logs', methods=['GET'])
 def get_all_logs():
-    """Endpoint do pobierania wszystkich logów na start."""
     return jsonify(log_history)
 
 if __name__ == '__main__':

@@ -11,8 +11,9 @@ app = Flask(__name__)
 camera = None
 camera_lock = threading.Lock()  # Blokada dla obsługi kamery
 
-# Domyślny plik wideo
-DEFAULT_VIDEO_PATH = '/Users/sqstudio/Desktop/Studia/Przetwarzanie_Sygnałów_i_Obrazów/cyber-parking/static/sample.mp4'
+# Sciezki plikow
+DEFAULT_VIDEO_PATH = '/Users/sqstudio/Desktop/Studia/Przetwarzanie_Sygnałów_i_Obrazów/cyber-parking/static/sample1.mp4'
+PLACEHOLDER_FRAME_PATH = '/Users/sqstudio/Desktop/Studia/Przetwarzanie_Sygnałów_i_Obrazów/cyber-parking/static/placeholder.jpg'
 
 # Model YOLOv8
 from roboflow import Roboflow
@@ -32,6 +33,7 @@ def log_event(message):
     log_history.append(log_message)
     print(log_message)
 
+# Debug - funkcja do logowania zuzycia pamieci
 def log_memory_usage():
     """Logowanie zużycia pamięci."""
     process = psutil.Process(os.getpid())
@@ -50,20 +52,9 @@ def cleanup(sig, frame):
 
 signal(SIGINT, cleanup)
 
-# Dodanie czarnego pasa na srodek klatki
-def add_black_band(frame):
-    height, width, _ = frame.shape
-    top = (height // 3) - 20
-    bottom = 2 * height // 3
-    frame[top:bottom, :] = 0
-    return frame
-
 # Detekcja parkingów
 def detect_parking_areas(frame):
     """Wykorzystanie modelu YOLOv8 do detekcji miejsc parkingowych."""
-
-    # Ukrycie niechcianego obszaru przed modelem
-    # frame = add_black_band(frame)
 
     # Konwersja obrazu do RGB (YOLO wymaga przestrzeni RGB)
     frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
@@ -90,7 +81,15 @@ def detect_parking_areas(frame):
     return parking_areas
 
 def draw_parking_boxes(frame, parking_areas):
+    height, width, _ = frame.shape
+    black_band_top = (height // 3) - 20
+    black_band_bottom = 2 * height // 3
+
     for (x1, y1, x2, y2, status) in parking_areas:
+        # Sprawdź, czy współrzędne prostokąta znajdują się poza "czarnym pasem"
+        if y1 >= black_band_top and y2 <= black_band_bottom:
+            continue
+
         if status == 'empty':
             color = (0, 255, 0)  # Zielony dla miejsc "empty"
             label = 'Empty'
@@ -98,45 +97,57 @@ def draw_parking_boxes(frame, parking_areas):
             color = (0, 0, 255)  # Czerwony dla miejsc "occupied"
             label = 'Occupied'
 
-        print(f"Rysowanie prostokąta: ({x1}, {y1}), ({x2}, {y2})")  # Logowanie współrzędnych
+        # Debug - logowanie współrzędnych
+        # print(f"Rysowanie prostokąta: ({x1}, {y1}), ({x2}, {y2})")
         cv2.rectangle(frame, (x1, y1), (x2, y2), color, 2)
         cv2.putText(frame, label, (x1, y1 - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.9, color, 2)
 
 def generate_frames():
     global camera
-    placeholder_path = os.path.join('static', 'placeholder.jpg')
-    placeholder_frame = (cv2.imread(placeholder_path) if os.path.exists(placeholder_path) 
+    placeholder_frame = (cv2.imread(PLACEHOLDER_FRAME_PATH) if os.path.exists(PLACEHOLDER_FRAME_PATH) 
                          else 255 * np.ones((480, 640, 3), dtype=np.uint8))
 
     parking_areas = None
-    frame_skip = 5  # Liczba klatek do pominięcia dla przyspieszenia
+    frame_skip = 15  # Liczba klatek do pominięcia dla przyspieszenia
     frame_counter = 0  # Licznik klatek
+
+    last_no_frame_log_time = 0  # Czas ostatniego logu "Kamera nie dostarcza klatek"
+    log_interval = 10  # Minimalny odstęp między logami (w sekundach)
 
     while True:
         try:
             with camera_lock:
-                log_memory_usage()
+                # log_memory_usage()
                 if camera and camera.isOpened():
                     ret, frame = camera.read()
                     if not ret:
-                        log_event("Kamera nie dostarcza klatek. Wyświetlanie klatki zastępczej.")
+                        current_time = time.time()
+                        if current_time - last_no_frame_log_time > log_interval:
+                            log_event("Kamera nie dostarcza klatek. Wyświetlanie klatki zastępczej.")
+                            last_no_frame_log_time = current_time
                         frame = placeholder_frame
                     else:
                         frame_counter += 1
-                        
-                        # Pomiń co 10. klatkę
+
+                        # Pomiń co frame_skip klatkę
                         if frame_counter % frame_skip != 0:
                             continue  # Pomijamy tę klatkę
 
-                        log_event("Klatka kamery odczytana pomyślnie.")
+                        # Debug - logowanie odczytania klatki
+                        # log_event("Klatka kamery odczytana pomyślnie. Numer klatki: {}".format(frame_counter))
 
                         parking_areas = detect_parking_areas(frame)
-                        log_event(f"Wykryto {len(parking_areas)} miejsc parkingowych.")
+                        
+                        # Debug - wypisywanie ilosci wykrytych miejsc parkingowych
+                        # log_event(f"Wykryto {len(parking_areas)} miejsc parkingowych.")
 
                         if parking_areas:
                             draw_parking_boxes(frame, parking_areas)
                 else:
-                    log_event("Brak aktywnego źródła wideo. Wyświetlanie klatki zastępczej.")
+                    current_time = time.time()
+                    if current_time - last_no_frame_log_time > log_interval:
+                        log_event("Brak aktywnego źródła wideo. Wyświetlanie klatki zastępczej.")
+                        last_no_frame_log_time = current_time
                     frame = placeholder_frame
 
             success, buffer = cv2.imencode('.jpg', frame)

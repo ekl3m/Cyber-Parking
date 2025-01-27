@@ -70,7 +70,7 @@ git checkout -b feature/your-feature
 4. Commit your changes:
 
 ```sh
-git commit -m "VX.X.X - Description of the change"
+git commit -m "VX.X.X : Description of the change"
 ```
 
 5. Push to your branch:

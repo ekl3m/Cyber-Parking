@@ -4,9 +4,11 @@ import time
 import threading
 import numpy as np
 
+from miscellaneous import manage_gates, delayed_manage_gates, GateAction
+from database_tools import *
 from detect_tools import *
-from log_tools import *
 from draw_tools import *
+from log_tools import *
 
 camera = None
 camera_lock = threading.Lock()  # Blokada dla obsługi kamery
@@ -15,7 +17,7 @@ last_no_frame_log_time = 0  # Czas ostatniego logu "Kamera nie dostarcza klatek"
 log_interval = 10  # Minimalny odstęp między logami (w sekundach)
 
 # Sciezki plikow
-DEFAULT_VIDEO_PATH = '/Users/sqstudio/Desktop/Studia/Przetwarzanie_Sygnałów_i_Obrazów/cyber-parking/static/sample1.mp4'
+DEFAULT_VIDEO_PATH = '/Users/sqstudio/Desktop/Studia/Przetwarzanie_Sygnałów_i_Obrazów/cyber-parking/static/sample2.mp4'
 PLACEHOLDER_FRAME_PATH = '/Users/sqstudio/Desktop/Studia/Przetwarzanie_Sygnałów_i_Obrazów/cyber-parking/static/placeholder.jpg'
 
 def set_camera(source):
@@ -65,12 +67,33 @@ def generate_frames():
 
                         parking_areas = detect_parking_areas(frame)
                         cars = detect_cars(frame)
+                        frame, detected_texts = detect_license_plate(frame, cars)
+
+                        for text in detected_texts:
+                            last_event = get_last_event(text)
+                            current_time = time.time()
+
+                            if not last_event or (last_event["action"] == "EXIT" and current_time - last_event["timestamp"] > 30):
+                                add_parking_event(text, "ENTRY")  # Zapis do bazy danych
+                                log_event(f"Samochód o numerze rejestracyjnym {text} wjeżdża na parking.")
+                                manage_gates(GateAction.ENTRY_OPEN)  # Otwórz bramkę wjazdową
+                                delayed_manage_gates(GateAction.ENTRY_CLOSE, 30) # Zamknij bramkę wjazdową po 30 sekundach
+                                
+
+                        for text in detected_texts:
+                            last_event = get_last_event(text)
+                            current_time = time.time()
+
+                            if last_event and last_event["action"] == "ENTRY" and current_time - last_event["timestamp"] > 30:
+                                add_parking_event(text, "EXIT")  # Zapis do bazy danych
+                                log_event(f"Samochód o numerze rejestracyjnym {text} opuszcza parking.")
+                                manage_gates(GateAction.EXIT_OPEN)  # Otwórz bramkę wyjazdową
+                                delayed_manage_gates(GateAction.EXIT_CLOSE, 30) # Zamknij bramkę wyjazdową po 30 sekundach
 
                         if parking_areas:
                             draw_parking_boxes(frame, parking_areas)
                         if cars:
                             draw_car_boxes(frame, cars)
-
                 else:
                     current_time = time.time()
                     if current_time - last_no_frame_log_time > log_interval:

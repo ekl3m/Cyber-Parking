@@ -3,6 +3,7 @@ import os
 
 from flask import Flask, render_template, request, Response, stream_with_context, jsonify
 from signal import signal, SIGINT
+from database_tools import *
 from detect_tools import *
 from log_tools import *
 from camera import *
@@ -20,6 +21,9 @@ def cleanup(sig, frame):
     exit(0)
 
 signal(SIGINT, cleanup)
+
+# Inicjalizacja bazy danych
+init_database()
 
 @app.route('/')
 def index():

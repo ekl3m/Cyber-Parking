@@ -2,7 +2,7 @@ import pytesseract
 import cv2
 import numpy as np
 
-from pytesseract import Output
+from miscellaneous import is_bbox_in_roi, process_roi
 from log_tools import *
 
 # Modele YOLOv8
@@ -20,63 +20,37 @@ car_project = rf.workspace("arac-zxyoi").project("car-detect-zefse")
 car_version = car_project.version(2)
 car_model = car_version.model
 
-def detect_license_plate(frame):
-    """Wykrywanie tekstu z tablicy rejestracyjnej na klatce wideo."""
-    # Resize the image to make it easier to process
-    resized_frame = cv2.resize(frame, None, fx=2, fy=2, interpolation=cv2.INTER_CUBIC)
+def detect_license_plate(frame, cars):
+    """Wykrywanie tekstu z tablicy rejestracyjnej tylko wtedy, gdy bounding box samochodu nachodzi na ROI."""
+    # Definiowanie dwóch obszarów zainteresowania (ROI)
+    roi1 = (1600, 200, 1900, 550)  # Pierwszy obszar
+    roi2 = (500, 330, 700, 650)  # Drugi obszar
 
-    # Convert the image to gray scale
-    gray = cv2.cvtColor(resized_frame, cv2.COLOR_BGR2GRAY)
+    # Debug - Zaznacz obszary ROI na klatce
+    # cv2.rectangle(frame, (roi1[0], roi1[1]), (roi1[2], roi1[3]), (0, 255, 255), 2)  # Żółty prostokąt dla ROI1
+    # cv2.rectangle(frame, (roi2[0], roi2[1]), (roi2[2], roi2[3]), (255, 255, 0), 2)  # Cyjanowy prostokąt dla ROI2
 
-    # Apply bilateral filter to reduce noise while keeping edges sharp
-    gray = cv2.bilateralFilter(gray, 11, 17, 17)
+    # Przetwarzanie tylko wtedy, gdy bounding box samochodu nachodzi na ROI
+    detected_texts = []
+    for car in cars:
+        x1, y1, x2, y2 = car  # Współrzędne bounding boxa samochodu
 
-    # Perform edge detection
-    edged = cv2.Canny(gray, 30, 200)
+        # Sprawdź, czy bounding box samochodu nachodzi na którykolwiek z ROI
+        if is_bbox_in_roi((x1, y1, x2, y2), roi1):
+            roi = frame[roi1[1]:roi1[3], roi1[0]:roi1[2]]  # Wycinamy ROI1
+            processed_roi, text = process_roi(roi)  # Przetwarzamy ROI1
+            if text:
+                detected_texts.append(text)
+                frame[roi1[1]:roi1[3], roi1[0]:roi1[2]] = cv2.resize(processed_roi, (roi1[2] - roi1[0], roi1[3] - roi1[1]))  # Przywróć przetworzony ROI
 
-    # Find contours
-    contours, _ = cv2.findContours(edged, cv2.RETR_TREE, cv2.CHAIN_APPROX_SIMPLE)
-    contours = sorted(contours, key=cv2.contourArea, reverse=True)[:10]
-    license_plate = None
+        if is_bbox_in_roi((x1, y1, x2, y2), roi2):
+            roi = frame[roi2[1]:roi2[3], roi2[0]:roi2[2]]  # Wycinamy ROI2
+            processed_roi, text = process_roi(roi)  # Przetwarzamy ROI2
+            if text:
+                detected_texts.append(text)
+                frame[roi2[1]:roi2[3], roi2[0]:roi2[2]] = cv2.resize(processed_roi, (roi2[2] - roi2[0], roi2[3] - roi2[1]))  # Przywróć przetworzony ROI
 
-    for cnt in contours:
-        # Approximate the contour
-        epsilon = 0.018 * cv2.arcLength(cnt, True)
-        approx = cv2.approxPolyDP(cnt, epsilon, True)
-
-        # If the contour has 4 sides, assume it might be the license plate
-        if len(approx) == 4:
-            license_plate = approx
-            break
-
-    if license_plate is not None:
-        # Create a mask for the license plate and extract it
-        mask = np.zeros(gray.shape, dtype=np.uint8)
-        cv2.drawContours(mask, [license_plate], 0, 255, -1)
-        
-        # Extract the region of interest (ROI)
-        x, y, w, h = cv2.boundingRect(license_plate)
-        roi = gray[y:y+h, x:x+w]
-
-        # Deskew the ROI if necessary
-        if h > w:
-            roi = cv2.rotate(roi, cv2.ROTATE_90_CLOCKWISE)
-
-        # Apply thresholding to make text more distinct
-        roi = cv2.threshold(roi, 0, 255, cv2.THRESH_BINARY | cv2.THRESH_OTSU)[1]
-
-        # Perform OCR on the ROI
-        text = pytesseract.image_to_string(roi, config='--psm 8')
-        log_event(f"Detected License Plate Text: {text.strip()}")
-
-        # Draw the contour and detected text on the original image
-        cv2.drawContours(resized_frame, [license_plate], -1, (0, 255, 0), 3)
-        cv2.putText(resized_frame, text.strip(), (x, y - 10), cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 255, 0), 2, cv2.LINE_AA)
-
-        return resized_frame, text.strip()
-    else:
-        log_event("No license plate detected.")
-        return frame, None
+    return frame, detected_texts
     
 # Detekcja parkingów
 def detect_parking_areas(frame):
